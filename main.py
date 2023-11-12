@@ -4,6 +4,7 @@ from Crypto.Cipher import PKCS1_v1_5
 import base64
 import uuid
 from datetime import datetime
+import bcrypt
 
 app = Flask(__name__)
 
@@ -25,13 +26,14 @@ def register():
         return jsonify({'error': 'User already exists'}), 409
 
     token = str(uuid.uuid4())
+    hashed_password = hash_password(password)
 
     key = RSA.generate(2048)
     private_key = key.export_key()
     public_key = key.publickey().export_key()
 
     users[login] = {
-        'password': password,
+        'password': hashed_password,
         'username': username,
         'token': token,
         'private_key': private_key,
@@ -47,12 +49,13 @@ def login():
     password = data.get('password')
 
     user = users.get(login)
-    if user and user['password'] == password:
+
+    if user and check_password(password, user['password']):
         token = str(uuid.uuid4())
         user['token'] = token
         return jsonify({'token': token}), 200
     else:
-        return jsonify({'error': 'Invalid credentials'}), 401
+        return jsonify({'error': 'Invalid credentials or user not existing'}), 401
 
 
 @app.route('/message', methods=['POST'])
@@ -93,7 +96,7 @@ def get_message():
         return jsonify({'error': 'Invalid token'}), 403
 
     user_messages = [item for item in messages if
-                      item['sender'] == user_info['username'] or item['receiver'] == user_info['login']]
+                     item['sender'] == user_info['username'] or item['receiver'] == user_info['login']]
 
     encrypted_messages = []
     public_key = RSA.import_key(user_info['public_key'])
@@ -110,6 +113,20 @@ def get_message():
         })
 
     return jsonify(encrypted_messages)
+
+
+# Hash a password
+def hash_password(plain_text_password):
+    password_bytes = plain_text_password.encode('utf-8')
+    salt = bcrypt.gensalt()
+    hashed_password = bcrypt.hashpw(password_bytes, salt)
+    return hashed_password
+
+
+# Check a password
+def check_password(plain_text_password, hashed_password):
+    password_bytes = plain_text_password.encode('utf-8')
+    return bcrypt.checkpw(password_bytes, hashed_password)
 
 
 if __name__ == '__main__':
