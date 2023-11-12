@@ -6,10 +6,13 @@ import base64
 import uuid
 from datetime import datetime
 import bcrypt
+from cryptography.fernet import Fernet
+import os
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mydatabase.db'
 db = SQLAlchemy(app)
+cipher_suite = None
 
 
 class User(db.Model):
@@ -37,7 +40,7 @@ class Message(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     receiver_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
-    text = db.Column(db.Text, nullable=False)
+    _encrypted_text = db.Column(db.Text, nullable=False)
     datetime = db.Column(db.DateTime, default=datetime.utcnow)
 
     @classmethod
@@ -45,6 +48,14 @@ class Message(db.Model):
         message = cls(sender_id=sender_id, receiver_id=receiver_id, text=text)
         db.session.add(message)
         db.session.commit()
+
+    @property
+    def text(self):
+        return cipher_suite.decrypt(self._encrypted_text.encode('utf-8')).decode('utf-8')
+
+    @text.setter
+    def text(self, plaintext):
+        self._encrypted_text = cipher_suite.encrypt(plaintext.encode('utf-8')).decode('utf-8')
 
 
 @app.route('/register', methods=['POST'])
@@ -185,5 +196,23 @@ def check_password(plain_text_password, hashed_password):
     return bcrypt.checkpw(password_bytes, hashed_password)
 
 
+def get_or_create_key(file_path):
+    try:
+        if not os.path.exists(file_path):
+            key = Fernet.generate_key()
+            with open(file_path, 'wb') as key_file:
+                key_file.write(key)
+            return key
+        else:
+            with open(file_path, 'rb') as key_file:
+                key = key_file.read()
+            return key
+    except Exception as e:
+        print(f"An error occurred while handling the key file: {e}")
+        raise
+
+
 if __name__ == '__main__':
+    fernet_key = get_or_create_key("./fernet.key")
+    cipher_suite = Fernet(fernet_key)
     app.run(debug=True)
