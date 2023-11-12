@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
 from Crypto.PublicKey import RSA
 from Crypto.Cipher import PKCS1_v1_5
 import base64
@@ -7,9 +8,43 @@ from datetime import datetime
 import bcrypt
 
 app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mydatabase.db'
+db = SQLAlchemy(app)
 
-users = {}  # This stores user information including their tokens
-messages = []  # This stores messages
+
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    hashed_password = db.Column(db.String(120), nullable=False)
+    token = db.Column(db.String(36), unique=True)
+    private_key = db.Column(db.Text, nullable=False)
+    public_key = db.Column(db.Text, nullable=False)
+
+    @classmethod
+    def create(cls, username, password, public_key):
+        hashed_password = hash_password(password)
+        key = RSA.generate(2048)
+        private_key = key.export_key()
+        token = str(uuid.uuid4())
+        user = cls(username=username, hashed_password=hashed_password,
+                   token=token, private_key=private_key, public_key=public_key)
+        db.session.add(user)
+        db.session.commit()
+        return token, key.publickey().export_key()
+
+
+class Message(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    receiver_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    text = db.Column(db.Text, nullable=False)
+    datetime = db.Column(db.DateTime, default=datetime.utcnow)
+
+    @classmethod
+    def create(cls, sender_id, receiver_id, text):
+        message = cls(sender_id=sender_id, receiver_id=receiver_id, text=text)
+        db.session.add(message)
+        db.session.commit()
 
 
 @app.route('/register', methods=['POST'])
@@ -22,38 +57,37 @@ def register():
 
     if not login or not password:
         return jsonify({'error': 'Missing login or password'}), 400
-    if login in users:
+    existing_user = User.query.filter_by(username=login).first()
+    if existing_user:
         return jsonify({'error': 'User already exists'}), 409
 
-    token = str(uuid.uuid4())
-    hashed_password = hash_password(password)
+    token, public_key = User.create(username, password, users_key)
 
-    key = RSA.generate(2048)
-    private_key = key.export_key()
-    public_key = key.publickey().export_key()
-
-    users[login] = {
-        'password': hashed_password,
-        'username': username,
-        'token': token,
-        'private_key': private_key,
-        'public_key': users_key
-    }
     return jsonify({'token': token, 'public_key': public_key}), 201
 
 
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
-    login = data.get('username')
+    username = data.get('username')
     password = data.get('password')
+    users_key = data.get('public_key')
 
-    user = users.get(login)
+    user = User.query.filter_by(username=username).first()
 
-    if user and check_password(password, user['password']):
+    if user and bcrypt.checkpw(password.encode('utf-8'), user.hashed_password):
+
         token = str(uuid.uuid4())
-        user['token'] = token
-        return jsonify({'token': token}), 200
+        key = RSA.generate(2048)
+        private_key = key.export_key()
+        public_key = key.publickey().export_key()
+
+        user.token = token
+        user.private_key = private_key
+        user.public_key = users_key
+        db.session.commit()
+
+        return jsonify({'token': token, 'public_key': public_key}), 200
     else:
         return jsonify({'error': 'Invalid credentials or user not existing'}), 401
 
@@ -66,22 +100,36 @@ def post_message():
     if not token or 'receiver' not in data or 'text' not in data:
         return jsonify({'error': 'Missing data'}), 400
 
-    user_info = next((d for u, d in users.items() if d['token'] == token), None)
-
-    if not user_info:
+    sender = User.query.filter_by(token=token).first()
+    if not sender:
         return jsonify({'error': 'Invalid token'}), 403
 
-    private_key = RSA.import_key(users[data['receiver']]['private_key'])
-    cipher = PKCS1_v1_5.new(private_key)
-    decrypted_message = cipher.decrypt(base64.b64decode(data['text']))
+    receiver = User.query.filter_by(username=data['receiver']).first()
+    if not receiver:
+        return jsonify({'error': 'Receiver not found'}), 404
 
-    messages.append({
-        'sender': user_info['username'],
-        'receiver': data['receiver'],
-        'text': decrypted_message.decode('utf-8'),
-        'datetime': datetime.now().isoformat()  # ISO 8601 format
-    })
-    return jsonify({'message': 'Message sent successfully'}), 201
+    try:
+        receiver_private_key = RSA.import_key(receiver.private_key)
+        cipher_rsa = PKCS1_v1_5.new(receiver_private_key)
+        decrypted_message = cipher_rsa.decrypt(base64.b64decode(data['text']), None)
+
+        # Check if decryption was successful
+        if decrypted_message is None:
+            raise ValueError('Unable to decrypt message')
+
+        new_message = Message(
+            sender_id=sender.id,
+            receiver_id=receiver.id,
+            text=decrypted_message.decode('utf-8'),
+            datetime=datetime.now()
+        )
+
+        db.session.add(new_message)
+        db.session.commit()
+
+        return jsonify({'message': 'Message sent successfully'}), 201
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 422
 
 
 @app.route('/', methods=['GET'])
@@ -91,25 +139,33 @@ def get_message():
     if not token:
         return jsonify({'error': 'Missing token'}), 400
 
-    user_info = next((d for u, d in users.items() if d['token'] == token), None)
-    if not user_info:
+    # Find the user by the token
+    user = User.query.filter_by(token=token).first()
+    if not user:
         return jsonify({'error': 'Invalid token'}), 403
 
-    user_messages = [item for item in messages if
-                     item['sender'] == user_info['username'] or item['receiver'] == user_info['login']]
+    # Get the messages where the user is either the sender or receiver
+    user_messages = Message.query.filter(
+        (Message.sender_id == user.id) | (Message.receiver_id == user.id)
+    ).all()
 
     encrypted_messages = []
-    public_key = RSA.import_key(user_info['public_key'])
+    public_key = RSA.import_key(user.public_key)
     cipher = PKCS1_v1_5.new(public_key)
 
+    # Encrypt the messages before sending them
     for msg in user_messages:
-        encrypted_text = cipher.encrypt(msg['text'].encode('utf-8'))
+        # Retrieve the associated user for each message
+        sender = User.query.get(msg.sender_id)
+        receiver = User.query.get(msg.receiver_id)
+
+        encrypted_text = cipher.encrypt(msg.text.encode('utf-8'))
         encrypted_message = base64.b64encode(encrypted_text).decode('utf-8')
         encrypted_messages.append({
-            'sender': msg['sender'],
-            'receiver': msg['receiver'],
+            'sender': sender.username,
+            'receiver': receiver.username,
             'text': encrypted_message,
-            'datetime': msg['datetime']
+            'datetime': msg.datetime.isoformat()  # Ensure datetime is in ISO format
         })
 
     return jsonify(encrypted_messages)
