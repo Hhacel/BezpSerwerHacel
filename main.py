@@ -12,7 +12,6 @@ import os
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mydatabase.db'
 db = SQLAlchemy(app)
-db.create_all()
 cipher_suite = None
 
 
@@ -213,6 +212,8 @@ def get_or_create_key(file_path):
 
 
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
     fernet_key = get_or_create_key("./fernet.key")
     cipher_suite = Fernet(fernet_key)
     app.run(debug=True)
