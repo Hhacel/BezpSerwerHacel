@@ -63,7 +63,6 @@ def register():
     data = request.get_json()
     login = data.get('username')
     password = data.get('password')
-    username = data.get('username', login)
     users_key = data.get('public_key')
 
     if not login or not password:
@@ -72,7 +71,7 @@ def register():
     if existing_user:
         return jsonify({'error': 'User already exists'}), 409
 
-    token, public_key = User.create(username, password, users_key)
+    token, public_key = User.create(login, password, users_key)
 
     return jsonify({'token': token, 'public_key': public_key}), 201
 
