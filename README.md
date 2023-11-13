@@ -42,7 +42,7 @@ This will start the Flask development server, and the API will be available at `
 - **Body**:
   - `username`: Registered username.
   - `password`: Password for the user.
-  - `public_key`: User's public RSA key (optional, if you want to update it).
+  - `public_key`: User's public RSA key.
 - **Success Response**: 
   - **Code**: `200 OK`
   - **Content**: `{ 'token': 'newly_generated_token', 'public_key': 'server_generated_public_key' }`
