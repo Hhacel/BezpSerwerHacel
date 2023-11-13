@@ -73,7 +73,7 @@ def register():
 
     token, public_key = User.create(login, password, users_key)
 
-    return jsonify({'token': token, 'public_key': public_key}), 201
+    return jsonify({'token': token, 'public_key': public_key.decode('utf-8')}), 201
 
 
 @app.route('/login', methods=['POST'])
@@ -97,7 +97,7 @@ def login():
         user.public_key = users_key
         db.session.commit()
 
-        return jsonify({'token': token, 'public_key': public_key}), 200
+        return jsonify({'token': token, 'public_key': public_key.decode('utf-8')}), 200
     else:
         return jsonify({'error': 'Invalid credentials or user not existing'}), 401
 
