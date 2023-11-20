@@ -119,8 +119,8 @@ def post_message():
         return jsonify({'error': 'Receiver not found'}), 404
 
     try:
-        receiver_private_key = RSA.import_key(receiver.private_key)
-        cipher_rsa = PKCS1_v1_5.new(receiver_private_key)
+        sender_private_key = RSA.import_key(sender.private_key)
+        cipher_rsa = PKCS1_v1_5.new(sender_private_key)
         decrypted_message = cipher_rsa.decrypt(base64.b64decode(data['text']), None)
 
         # Check if decryption was successful
